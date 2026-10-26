@@ -58,7 +58,13 @@ describe('FilterBar', () => {
     render(<FilterBar filters={DEFAULT_FILTERS} onChange={onChange} refresh={false} connected />)
     await flush()
     expect(shown()).toBe('照片、旅行')
-    expect(onChange).toHaveBeenLastCalledWith({ ...DEFAULT_FILTERS, folders: [{ rootId: 1, rel: '' }, { rootId: 2, rel: '2024\\旅行' }] })
+    expect(onChange).toHaveBeenLastCalledWith({
+      ...DEFAULT_FILTERS,
+      folders: [
+        { rootId: 1, rel: '' },
+        { rootId: 2, rel: '2024\\旅行' },
+      ],
+    })
   })
 
   it('勾选三项以上时显示数量；保存为全部文件夹时不限范围', async () => {
@@ -173,14 +179,55 @@ describe('FilterBar', () => {
     render(<Harness spy={onChange} />)
     await flush()
     await click(button('文件夹'))
-    const menu = document.querySelector('[role="listbox"]')!
+    const menu = document.querySelector('[data-level="0"]')!
     expect(menu.textContent).not.toContain('自定义')
     await click(button('照片'))
-    expect(calls.filter((c) => c.cmd === 'set_folder_filter').map((c) => c.args)).toEqual([{
-      custom: true,
-      entries: [{ rootId: 1, rel: '', checked: false }, { rootId: 2, rel: '', checked: true }],
-    }])
-    expect(shown()).toBe('合同')
-    expect(onChange).toHaveBeenLastCalledWith({ ...DEFAULT_FILTERS, folders: [{ rootId: 2, rel: '' }] })
+    expect(calls.filter((c) => c.cmd === 'set_folder_filter').map((c) => c.args)).toEqual([
+      {
+        custom: true,
+        entries: [
+          { rootId: 1, rel: '', checked: true },
+          { rootId: 2, rel: '', checked: false },
+        ],
+      },
+    ])
+    expect(shown()).toBe('照片')
+    expect(onChange).toHaveBeenLastCalledWith({ ...DEFAULT_FILTERS, folders: [{ rootId: 1, rel: '' }] })
+  })
+  it('快速连续勾选立即更新界面，按顺序持久化，失败时退回最后成功范围', async () => {
+    let resolveFirst!: () => void
+    let rejectSecond!: (reason: unknown) => void
+    let saves = 0
+    const calls = mockCore({
+      list_roots: () => ROOTS,
+      get_folder_filter: () => ({ custom: false, entries: [] }),
+      set_folder_filter: () =>
+        ++saves === 1
+          ? new Promise<void>((resolve) => {
+              resolveFirst = resolve
+            })
+          : new Promise<void>((_, reject) => {
+              rejectSecond = reject
+            }),
+    })
+    const change = vi.fn()
+    render(<Harness spy={change} />)
+    await flush()
+    await click(button('文件夹'))
+    await click(button('照片'))
+    await click(button('合同'))
+    expect(shown()).toBe('照片、合同')
+    expect(count(calls, 'set_folder_filter')).toBe(1)
+    await act(async () => resolveFirst())
+    await flush()
+    expect(count(calls, 'set_folder_filter')).toBe(2)
+    expect(calls.filter((c) => c.cmd === 'set_folder_filter')[1].args.entries).toEqual([
+      { rootId: 1, rel: '', checked: true },
+      { rootId: 2, rel: '', checked: true },
+    ])
+    await act(async () => rejectSecond({ message: '保存失败' }))
+    await flush()
+    expect(shown()).toBe('照片')
+    expect(change).toHaveBeenLastCalledWith({ ...DEFAULT_FILTERS, folders: [{ rootId: 1, rel: '' }] })
   })
 })

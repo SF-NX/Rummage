@@ -60,7 +60,6 @@ export default function FolderSelect({ roots, filters, onChange, disabled }: Pro
   const sequence = useRef(0)
   const focusLevel = useRef<number | null>(null)
   const scopes = folderScope(filters.entries)
-  const values = filters.custom ? [...new Set(scopes.map((scope) => scope.rootId))] : roots.map((r) => r.id)
   const rootFolders: Folder[] = roots.map((r) => ({ rootId: r.id, path: r.path, subfolder: '', name: nameOf(r.path), hasChildren: true }))
   const names = scopes.flatMap((scope) => {
     const root = roots.find((r) => r.id === scope.rootId)
@@ -111,7 +110,7 @@ export default function FolderSelect({ roots, filters, onChange, disabled }: Pro
   const show = (keyboard = false) => {
     if (disabled) return
     const rect = triggerRef.current!.getBoundingClientRect()
-    const height = Math.min(maxHeight, (roots.length + 1) * 36 + 12)
+    const height = Math.min(maxHeight, (roots.length + 2) * 36 + 12)
     setPosition({
       left: Math.max(8, Math.min(rect.left, window.innerWidth - 248)),
       top: rect.bottom + height + 8 <= window.innerHeight ? rect.bottom + 6 : Math.max(8, rect.top - height - 6),
@@ -123,14 +122,25 @@ export default function FolderSelect({ roots, filters, onChange, disabled }: Pro
 
   const select = (folder: Folder) => {
     const rel = folder.subfolder.replace(/[\\/]+$/, '')
+    const sep = folder.path.includes('\\') ? '\\' : '/'
+    const current = filters.custom ? scopes : []
+    const selected = current.some((scope) => scope.rootId === folder.rootId && scope.rel === rel)
+    // 父子范围相互包含时只保留本次选择的范围，其他分支继续参与搜索
+    const next = current.filter((scope) => {
+      if (scope.rootId !== folder.rootId) return true
+      if (selected) return scope.rel !== rel
+      return scope.rel !== '' && rel !== '' && !rel.startsWith(scope.rel + sep) && !scope.rel.startsWith(rel + sep)
+    })
+    if (!selected) next.push({ rootId: folder.rootId, rel })
+    if (!next.length) return
     const entries = [
-      ...roots.map((root) => ({ rootId: root.id, rel: '', checked: root.id === folder.rootId })),
-      ...filters.entries.filter((e) => e.rel).map((e) => ({ ...e, checked: e.rootId === folder.rootId && e.rel === rel })),
+      ...roots.map((root) => ({ rootId: root.id, rel: '', checked: next.some((scope) => scope.rootId === root.id) })),
+      ...filters.entries.filter((e) => e.rel).map((e) => ({ ...e, checked: next.some((scope) => scope.rootId === e.rootId && scope.rel === e.rel) })),
     ]
-    if (rel && !entries.some((e) => e.rootId === folder.rootId && e.rel === rel)) entries.push({ rootId: folder.rootId, rel, checked: true })
+    for (const scope of next) {
+      if (scope.rel && !entries.some((e) => e.rootId === scope.rootId && e.rel === scope.rel)) entries.push({ ...scope, checked: true })
+    }
     onChange({ custom: true, entries })
-    close()
-    triggerRef.current?.focus()
   }
 
   const expand = async (folder: Folder, depth: number, rect: DOMRect, keyboard = false) => {
@@ -200,7 +210,10 @@ export default function FolderSelect({ roots, filters, onChange, disabled }: Pro
   }
 
   const row = (folder: Folder, level: number) => {
-    const selected = filters.custom ? scopes.some((scope) => scope.rootId === folder.rootId && scope.rel === folder.subfolder.replace(/[\\/]+$/, '')) : level === 0
+    const rel = folder.subfolder.replace(/[\\/]+$/, '')
+    const sep = folder.path.includes('\\') ? '\\' : '/'
+    const selected = filters.custom && scopes.some((scope) => scope.rootId === folder.rootId && scope.rel === rel)
+    const partial = filters.custom && !selected && scopes.some((scope) => scope.rootId === folder.rootId && (!rel || scope.rel.startsWith(rel + sep)))
     const expanded = branches[level] && keyOf(branches[level].folder) === keyOf(folder)
     return (
       <div
@@ -212,27 +225,13 @@ export default function FolderSelect({ roots, filters, onChange, disabled }: Pro
       >
         <button
           type="button"
-          role={level === 0 ? 'option' : 'menuitem'}
-          aria-selected={level === 0 ? selected : undefined}
+          role="menuitemcheckbox"
+          aria-checked={partial ? 'mixed' : selected}
           data-row
           data-folder={keyOf(folder)}
           title={folder.path}
           className={`${ROW_CLASS} min-w-0 flex-1 hover:!bg-transparent ${selected || expanded ? 'font-medium text-blue-600 dark:text-blue-400' : ''}`}
-          onClick={() => {
-            if (level > 0) {
-              select(folder)
-              return
-            }
-            const next = values.includes(folder.rootId) ? values.filter((id) => id !== folder.rootId) : [...values, folder.rootId]
-            if (next.length)
-              onChange({
-                custom: next.length !== roots.length,
-                entries: [
-                  ...roots.map((root) => ({ rootId: root.id, rel: '', checked: next.includes(root.id) })),
-                  ...filters.entries.filter((e) => e.rel).map((e) => ({ ...e, checked: false })),
-                ],
-              })
-          }}
+          onClick={() => select(folder)}
           onKeyDown={(e) => {
             if (e.key === 'ArrowRight' && folder.hasChildren) {
               e.preventDefault()
@@ -241,9 +240,13 @@ export default function FolderSelect({ roots, filters, onChange, disabled }: Pro
             }
           }}
         >
-          <span aria-hidden="true" className="w-4 shrink-0">
-            {selected ? <CheckIcon className="h-3.5 w-3.5" /> : <FolderIcon className={`h-3.5 w-3.5 ${expanded ? '' : 'text-gray-400'}`} />}
+          <span
+            aria-hidden="true"
+            className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border ${selected || partial ? 'border-blue-500 bg-blue-500 text-white' : 'border-gray-300 dark:border-gray-500'}`}
+          >
+            {selected ? <CheckIcon className="h-3 w-3" /> : partial ? <span className="h-px w-2 bg-current" /> : null}
           </span>
+          <FolderIcon className={`h-3.5 w-3.5 shrink-0 ${expanded || selected ? '' : 'text-gray-400'}`} />
           <span className="truncate">{folder.name}</span>
         </button>
         {folder.hasChildren && (
@@ -297,9 +300,8 @@ export default function FolderSelect({ roots, filters, onChange, disabled }: Pro
         createPortal(
           <div ref={menuRef} className="pointer-events-none fixed inset-0 z-50">
             <div
-              role="listbox"
+              role="menu"
               aria-label="文件夹"
-              aria-multiselectable
               data-level={0}
               className={MENU_CLASS}
               style={{ ...position, maxHeight }}
@@ -321,6 +323,22 @@ export default function FolderSelect({ roots, filters, onChange, disabled }: Pro
                 全部文件夹
               </button>
               {rootFolders.map((folder) => row(folder, 0))}
+              <div className="sticky bottom-0 flex h-9 items-center justify-between border-t border-gray-100 bg-white px-3 dark:border-white/10 dark:bg-gray-800">
+                <span className="text-gray-400" title="可多选，至少保留一个文件夹">
+                  {filters.custom ? `已选 ${scopes.length} 项` : '全部文件夹'}
+                </span>
+                <button
+                  type="button"
+                  data-row
+                  className="rounded px-2 py-1 text-blue-600 hover:bg-blue-50 focus-visible:bg-blue-50 dark:text-blue-400 dark:hover:bg-white/10"
+                  onClick={() => {
+                    close()
+                    triggerRef.current?.focus()
+                  }}
+                >
+                  完成
+                </button>
+              </div>
             </div>
             {branches.map((branch, depth) => (
               <div
@@ -336,6 +354,8 @@ export default function FolderSelect({ roots, filters, onChange, disabled }: Pro
                 <button
                   type="button"
                   data-row
+                  role="menuitemcheckbox"
+                  aria-checked={filters.custom && scopes.some((scope) => scope.rootId === branch.folder.rootId && scope.rel === branch.folder.subfolder.replace(/[\\/]+$/, ''))}
                   className={`${ROW_CLASS} border-b border-gray-100 font-medium text-blue-600 dark:border-white/10 dark:text-blue-400`}
                   onMouseEnter={() => setBranches((old) => old.slice(0, depth + 1))}
                   onClick={() => select(branch.folder)}

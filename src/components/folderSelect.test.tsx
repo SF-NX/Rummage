@@ -1,17 +1,39 @@
 // @vitest-environment jsdom
 
-import { act } from 'react'
+import { act, useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import type { FolderFilter, RootInfo } from '../types'
 import { button, click, flush, mockCore, render } from '../test/tauri'
 import FolderSelect, { folderMenuPosition } from './FolderSelect'
+import { folderScope } from '../lib/filter'
 
 const INITIAL_FILTER: FolderFilter = { custom: false, entries: [] }
 const roots: RootInfo[] = [{ id: 1, path: 'D:\\照片', offline: false, missing: false, files: 10, excludes: [], skipNomedia: true, scanning: false }]
 
+function Harness({ list = roots, initial = INITIAL_FILTER, onChange }: { list?: RootInfo[]; initial?: FolderFilter; onChange: (next: FolderFilter) => void }) {
+  const [filters, setFilters] = useState(initial)
+  return (
+    <FolderSelect
+      roots={list}
+      filters={filters}
+      disabled={false}
+      onChange={(next) => {
+        setFilters(next)
+        onChange(next)
+      }}
+    />
+  )
+}
+
+function item(name: string) {
+  const row = [...document.querySelectorAll<HTMLButtonElement>('[data-folder]')].find((el) => el.textContent?.trim() === name)
+  if (!row) throw new Error(`找不到目录：${name}`)
+  return row
+}
+
 async function hover(name: string) {
   act(() => {
-    button(name).dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+    item(name).dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
   })
   await flush()
 }
@@ -37,8 +59,8 @@ describe('FolderSelect', () => {
     render(<FolderSelect roots={roots} filters={filters} onChange={change} disabled={false} />)
     await click(button('文件夹'))
     await hover('照片')
-    await click(button('旅行'))
-    expect(change.mock.lastCall?.[0].entries).toContainEqual({ rootId: 1, rel: '旧目录', checked: false })
+    await click(item('旅行'))
+    expect(change.mock.lastCall?.[0].entries).toContainEqual({ rootId: 1, rel: '旧目录', checked: true })
     expect(change.mock.lastCall?.[0].entries).toContainEqual({ rootId: 1, rel: '旅行', checked: true })
   })
 
@@ -49,11 +71,11 @@ describe('FolderSelect', () => {
     render(<FolderSelect roots={roots} filters={filters} onChange={change} disabled={false} />)
     await click(button('文件夹'))
     await hover('照片')
-    expect(button('旅行')).toBeTruthy()
+    expect(item('旅行')).toBeTruthy()
     await hover('旅行')
-    expect(document.querySelectorAll('[role="menu"]')).toHaveLength(2)
+    expect(document.querySelectorAll('[role="menu"]')).toHaveLength(3)
     expect(calls.filter((c) => c.cmd === 'list_search_folders').map((c) => c.args.subfolder)).toEqual(['', '旅行\\'])
-    await click(button('海边'))
+    await click(item('海边'))
     expect(change).toHaveBeenLastCalledWith({
       custom: true,
       entries: [
@@ -61,6 +83,8 @@ describe('FolderSelect', () => {
         { rootId: 1, rel: '旅行\\海边', checked: true },
       ],
     })
+    expect(button('文件夹').getAttribute('aria-expanded')).toBe('true')
+    await click(button('完成'))
     expect(button('文件夹').getAttribute('aria-expanded')).toBe('false')
   })
 
@@ -73,6 +97,7 @@ describe('FolderSelect', () => {
     expect(document.body.textContent).toContain('没有已收录的子文件夹')
     await click(button('在此文件夹中搜索'))
     expect(change.mock.lastCall?.[0].entries[0].rel).toBe('')
+    await click(button('完成'))
     await click(button('文件夹'))
     await click(button('搜索全部文件夹'))
     expect(change).toHaveBeenLastCalledWith(INITIAL_FILTER)
@@ -95,7 +120,7 @@ describe('FolderSelect', () => {
     await act(async () => resolveOld([{ name: '旧目录', hasChildren: false }]))
     await flush()
     expect(document.body.textContent).not.toContain('旧目录')
-    expect(button('合同')).toBeTruthy()
+    expect(item('合同')).toBeTruthy()
     act(() => document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })))
     expect(document.querySelector('[role="menu"]')).toBeNull()
   })
@@ -128,7 +153,76 @@ describe('FolderSelect', () => {
     expect(document.body.textContent).toContain('后台服务未连接')
     fail = false
     await click(button('后台服务未连接（重试）'))
-    expect(button('旅行')).toBeTruthy()
+    expect(item('旅行')).toBeTruthy()
+  })
+
+  it('同级与跨根目录可以连续多选，父目录合并下级，取消时至少保留一项', async () => {
+    mockCore({
+      list_search_folders: ({ rootId }) =>
+        rootId === 1
+          ? [
+              { name: '旅行', hasChildren: false },
+              { name: '家庭', hasChildren: false },
+            ]
+          : [{ name: '合同', hasChildren: false }],
+    })
+    const change = vi.fn()
+    render(<Harness list={[...roots, { ...roots[0], id: 2, path: 'E:\\资料' }]} onChange={change} />)
+    await click(button('文件夹'))
+    await hover('照片')
+    await click(item('旅行'))
+    await click(item('家庭'))
+    expect(folderScope(change.mock.lastCall![0].entries)).toEqual([
+      { rootId: 1, rel: '旅行' },
+      { rootId: 1, rel: '家庭' },
+    ])
+    expect(item('照片').getAttribute('aria-checked')).toBe('mixed')
+    expect(item('家庭').getAttribute('aria-checked')).toBe('true')
+    await hover('资料')
+    await click(item('合同'))
+    expect(folderScope(change.mock.lastCall![0].entries)).toHaveLength(3)
+    await click(item('照片'))
+    expect(folderScope(change.mock.lastCall![0].entries)).toEqual([
+      { rootId: 1, rel: '' },
+      { rootId: 2, rel: '合同' },
+    ])
+    await click(item('照片'))
+    expect(folderScope(change.mock.lastCall![0].entries)).toEqual([{ rootId: 2, rel: '合同' }])
+    await hover('资料')
+    const count = change.mock.calls.length
+    await click(item('合同'))
+    expect(change).toHaveBeenCalledTimes(count)
+    await click(button('搜索全部文件夹'))
+    expect(change.mock.lastCall![0].custom).toBe(false)
+  })
+
+  it('选择子目录缩小已选父目录范围，保留其他分支且不混淆同名前缀', async () => {
+    mockCore({
+      list_search_folders: ({ subfolder }) =>
+        subfolder === ''
+          ? [
+              { name: '旅行', hasChildren: true },
+              { name: '旅行备份', hasChildren: false },
+            ]
+          : [{ name: '海边', hasChildren: false }],
+    })
+    const change = vi.fn()
+    render(<Harness initial={{ custom: true, entries: [{ rootId: 1, rel: '', checked: true }] }} onChange={change} />)
+    await click(button('文件夹'))
+    await hover('照片')
+    await click(item('旅行'))
+    await click(item('旅行备份'))
+    await hover('旅行')
+    await click(item('海边'))
+    expect(folderScope(change.mock.lastCall![0].entries)).toEqual([
+      { rootId: 1, rel: '旅行备份' },
+      { rootId: 1, rel: '旅行\\海边' },
+    ])
+    await click(document.querySelector<HTMLButtonElement>('[data-level="2"] [data-row]')!)
+    expect(folderScope(change.mock.lastCall![0].entries)).toEqual([
+      { rootId: 1, rel: '旅行' },
+      { rootId: 1, rel: '旅行备份' },
+    ])
   })
 
   it('靠近右边缘向左展开，靠近底部上移，始终保留窗口边距', () => {

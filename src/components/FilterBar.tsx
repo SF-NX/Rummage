@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import type { FolderFilter, RootInfo } from '../types'
 import { customLabel, folderScope, KIND_OPTIONS, TIME_OPTIONS, type Filters, type TimeRange } from '../lib/filter'
@@ -34,18 +34,26 @@ export default function FilterBar({ filters, onChange, refresh, connected }: Pro
   // 读取过文件夹列表；读到之前不禁用文件夹筛选
   const [loaded, setLoaded] = useState(false)
   const [folder, setFolder] = useState<FolderFilter>({ custom: false, entries: [] })
+  const confirmed = useRef(folder)
+  const saveQueue = useRef(Promise.resolve())
+  const revision = useRef(0)
   const [editing, setEditing] = useState(false)
   const range = customLabel(filters.from, filters.to)
 
   const loadRoots = () => {
+    const version = revision.current
     invoke<RootInfo[]>('list_roots')
       .then((list) => {
         setRoots(list)
         setLoaded(true)
       })
       .catch((err) => console.warn('无法读取文件夹列表：', err))
-    invoke<FolderFilter>('get_folder_filter')
-      .then((f) => setFolder({ custom: f.custom, entries: f.entries }))
+    saveQueue.current.then(() => invoke<FolderFilter>('get_folder_filter'))
+      .then((f) => {
+        if (version !== revision.current) return
+        confirmed.current = { custom: f.custom, entries: f.entries }
+        setFolder(confirmed.current)
+      })
       .catch((err) => console.warn('无法读取文件夹筛选：', err))
   }
 
@@ -66,13 +74,19 @@ export default function FilterBar({ filters, onChange, refresh, connected }: Pro
     if (JSON.stringify(filters.folders) !== scopeKey) onChange({ ...filters, folders: scope })
   }, [scopeKey, filters, onChange])
 
-  const save = (next: FolderFilter) =>
-    invoke('set_folder_filter', { custom: next.custom, entries: next.entries })
-      .then(() => setFolder(next))
+  const save = (next: FolderFilter) => {
+    const version = ++revision.current
+    setFolder(next)
+    // 连续勾选立即反馈，完整范围按顺序保存，避免旧回复覆盖后续选择
+    saveQueue.current = saveQueue.current
+      .then(() => invoke('set_folder_filter', { custom: next.custom, entries: next.entries }))
+      .then(() => { confirmed.current = next })
       .catch((err) => {
+        if (version === revision.current) setFolder(confirmed.current)
         console.warn('无法保存文件夹筛选：', err)
         showToast(errorMessage(err, '无法保存文件夹筛选，请稍后再试'), 'error')
       })
+  }
 
   const empty = loaded && !roots.length
 
