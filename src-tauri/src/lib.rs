@@ -117,6 +117,7 @@ pub fn run() {
             core::core_status,
             core::restart_core,
             search::search,
+            search::list_search_folders,
             search::index_status,
             pause::pause_indexing,
             pause::resume_indexing,

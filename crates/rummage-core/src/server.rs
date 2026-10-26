@@ -653,6 +653,15 @@ fn respond(body: Request, state: &Arc<State>) -> Result<Reply, ApiError> {
         }
         // 回复写出后由 session 通知主循环退出
         Request::Shutdown => Ok(Reply::Done),
+        Request::ListSearchFolders { root_id, subfolder } => {
+            let folders = db(state)?
+                .search_folders(root_id, &subfolder)
+                .map_err(|err| api_error(ApiError::UNAVAILABLE, err.to_string()))?
+                .into_iter()
+                .map(|(name, has_children)| rummage_proto::SearchFolderEntry { name, has_children })
+                .collect();
+            Ok(Reply::SearchFolders { folders })
+        }
         Request::ListRoots => {
             let roots = db(state)?
                 .list_roots()

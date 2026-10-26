@@ -3,11 +3,10 @@ import { invoke } from '@tauri-apps/api/core'
 import type { FolderFilter, RootInfo } from '../types'
 import { customLabel, folderScope, KIND_OPTIONS, TIME_OPTIONS, type Filters, type TimeRange } from '../lib/filter'
 import { errorMessage } from '../lib/errors'
-import { folderName } from '../lib/format'
 import { isTauri } from '../lib/platform'
 import { useCoreEvent } from '../hooks/useCoreEvent'
 import DateRangePopover from './DateRangePopover'
-import FolderFilterDialog from './FolderFilterDialog'
+import FolderSelect from './FolderSelect'
 import { FilterIcon } from './icons'
 import MultiSelect from './MultiSelect'
 import Select from './Select'
@@ -27,7 +26,7 @@ const SELECT_WIDTH = 'w-32'
 
 /**
  * 搜索框下方的筛选条：类型多选菜单（至少留一项），文件夹、修改时间下拉框。
- * “自定义”：选项右侧的按钮打开弹窗或弹出层；还没设过或已选自定义时点选项本身也打开它，保存或确定后才选中。
+ * 时间的“自定义”选项打开日期弹出层，文件夹通过级联菜单选择
  * 文件夹的勾选保存在后台服务中，筛选条只按保存的结果算出生效范围
  */
 export default function FilterBar({ filters, onChange, refresh, connected }: Props) {
@@ -36,7 +35,6 @@ export default function FilterBar({ filters, onChange, refresh, connected }: Pro
   const [loaded, setLoaded] = useState(false)
   const [folder, setFolder] = useState<FolderFilter>({ custom: false, entries: [] })
   const [editing, setEditing] = useState(false)
-  const [picking, setPicking] = useState(false)
   const range = customLabel(filters.from, filters.to)
 
   const loadRoots = () => {
@@ -68,14 +66,6 @@ export default function FilterBar({ filters, onChange, refresh, connected }: Pro
     if (JSON.stringify(filters.folders) !== scopeKey) onChange({ ...filters, folders: scope })
   }, [scopeKey, filters, onChange])
 
-  // 文件夹列表读到之前没有根目录的名称，先不列出
-  const names = active.flatMap((e) => {
-    const root = roots.find((r) => r.id === e.rootId)
-    if (!root) return []
-    return [folderName(e.rel || root.path)]
-  })
-  const summary = names.length <= 2 ? names.join('、') : `${names.length} 个文件夹`
-
   const save = (next: FolderFilter) =>
     invoke('set_folder_filter', { custom: next.custom, entries: next.entries })
       .then(() => setFolder(next))
@@ -100,36 +90,7 @@ export default function FilterBar({ filters, onChange, refresh, connected }: Pro
         />
       </div>
       <div className={SELECT_WIDTH}>
-        <Select<'all' | 'custom'>
-          label="文件夹"
-          value={custom ? 'custom' : 'all'}
-          onChange={(v) => {
-            if (v === 'all') {
-              if (folder.custom) save({ custom: false, entries: folder.entries })
-              return
-            }
-            // 选项右侧的按钮键盘够不到：已选自定义时再选一次也打开弹窗
-            if (!active.length || custom) setPicking(true)
-            else save({ custom: true, entries: folder.entries })
-          }}
-          options={[
-            { label: '全部文件夹', value: 'all' },
-            { label: '自定义', value: 'custom', display: summary || '自定义', action: { label: '选择文件夹', icon: <FilterIcon className="h-3.5 w-3.5" />, onClick: () => setPicking(true) } },
-          ]}
-          disabled={empty}
-          tip={empty ? '还没有添加文件夹' : undefined}
-        />
-        {picking && (
-          <FolderFilterDialog
-            roots={roots}
-            filter={folder}
-            onSaved={(next) => {
-              setFolder(next)
-              setPicking(false)
-            }}
-            onClose={() => setPicking(false)}
-          />
-        )}
+        <FolderSelect roots={roots} filters={folder} onChange={save} disabled={empty} />
       </div>
       {/* 自定义范围比其他选项长，按内容定宽 */}
       <div className="relative min-w-32">

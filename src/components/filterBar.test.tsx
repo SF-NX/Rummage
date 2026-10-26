@@ -4,7 +4,7 @@ import { act, useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import type { FolderFilter, RootInfo } from '../types'
 
-import { button, click, emitEvent, findButton, flush, mockCore, render } from '../test/tauri'
+import { button, click, emitEvent, flush, mockCore, render } from '../test/tauri'
 import { DEFAULT_FILTERS, type Filters } from '../lib/filter'
 import FilterBar from './FilterBar'
 
@@ -34,13 +34,11 @@ const ROOTS = [root(1, 'D:\\照片'), root(2, 'E:\\资料\\合同\\')]
 /** 展开“文件夹”下拉框并点选一项 */
 async function choose(label: string) {
   await click(button('文件夹'))
-  const el = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((o) => o.querySelector('span')?.textContent === label)
-  if (!el) throw new Error(`找不到选项：${label}`)
-  await click(el)
+  await click(button(label))
 }
 
 /** 触发器上显示的文字（只取选中的一项） */
-const shown = () => button('文件夹').querySelector('[aria-hidden="false"]')?.textContent
+const shown = () => button('文件夹').querySelector('span')?.textContent
 
 const count = (calls: { cmd: string }[], cmd: string) => calls.filter((c) => c.cmd === cmd).length
 
@@ -145,12 +143,7 @@ describe('FilterBar', () => {
     expect(trigger.getAttribute('aria-disabled')).toBe('true')
     await click(trigger)
     expect(trigger.getAttribute('aria-expanded')).toBe('false')
-    // jsdom 没有 elementFromPoint，气泡定位时用到
-    document.elementFromPoint = () => trigger
-    act(() => {
-      trigger.dispatchEvent(new MouseEvent('mouseenter'))
-    })
-    expect(document.body.textContent).toContain('还没有添加文件夹')
+    expect(trigger.getAttribute('title')).toBe('还没有添加文件夹')
 
     roots = [root(1, 'D:\\照片')]
     await emitEvent('core-event', { type: 'RootsChanged' })
@@ -174,43 +167,20 @@ describe('FilterBar', () => {
     expect(onChange).toHaveBeenLastCalledWith({ ...DEFAULT_FILTERS, folders: [] })
   })
 
-  it('选“自定义”：有已勾选的项时直接切换，没有时打开弹窗', async () => {
-    let entries = [{ rootId: 2, rel: '', checked: true }]
-    const calls = mockCore({ list_roots: () => ROOTS, get_folder_filter: () => ({ custom: false, entries }) })
+  it('文件夹菜单直接列出根目录，勾选后保存并更新搜索范围', async () => {
+    const calls = mockCore({ list_roots: () => ROOTS, get_folder_filter: () => ({ custom: false, entries: [] }) })
     const onChange = vi.fn()
     render(<Harness spy={onChange} />)
     await flush()
-
-    await choose('自定义')
-    expect(calls.filter((c) => c.cmd === 'set_folder_filter').map((c) => c.args)).toEqual([{ custom: true, entries }])
-    expect(findButton('保存')).toBeNull()
-    expect(shown()).toBe('合同')
-    expect(onChange).toHaveBeenLastCalledWith({ ...DEFAULT_FILTERS, folders: [{ rootId: 2, rel: '' }] })
-
-    // 已是自定义时再选一次打开弹窗
-    await choose('自定义')
-    expect(findButton('保存')).not.toBeNull()
-    await click(button('取消'))
-
-    entries = [{ rootId: 2, rel: '', checked: false }]
-    await emitEvent('core-event', { type: 'RootsChanged' })
-    await choose('自定义')
-    expect(findButton('保存')).not.toBeNull()
-    expect(count(calls, 'set_folder_filter')).toBe(1)
-  })
-
-  it('弹窗保存后更新生效范围', async () => {
-    mockCore({ list_roots: () => [root(1, 'D:\\照片'), root(2, 'D:\\文档')], get_folder_filter: () => ({ custom: false, entries: [] }) })
-    const onChange = vi.fn()
-    render(<FilterBar filters={DEFAULT_FILTERS} onChange={onChange} refresh={false} connected />)
-    await flush()
     await click(button('文件夹'))
-    await click(button('选择文件夹'))
-    const box = [...document.querySelectorAll('label')].find((l) => l.textContent === '文档')?.querySelector('input')
-    await click(box as HTMLElement)
-    await click(button('保存'))
-    expect(findButton('保存')).toBeNull()
-    expect(shown()).toBe('文档')
+    const menu = document.querySelector('[role="listbox"]')!
+    expect(menu.textContent).not.toContain('自定义')
+    await click(button('照片'))
+    expect(calls.filter((c) => c.cmd === 'set_folder_filter').map((c) => c.args)).toEqual([{
+      custom: true,
+      entries: [{ rootId: 1, rel: '', checked: false }, { rootId: 2, rel: '', checked: true }],
+    }])
+    expect(shown()).toBe('合同')
     expect(onChange).toHaveBeenLastCalledWith({ ...DEFAULT_FILTERS, folders: [{ rootId: 2, rel: '' }] })
   })
 })

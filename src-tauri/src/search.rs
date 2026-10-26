@@ -659,6 +659,18 @@ pub async fn media<R: Runtime>(
     }
 }
 
+#[tauri::command]
+pub async fn list_search_folders<R: Runtime>(
+    app: AppHandle<R>,
+    root_id: i64,
+    subfolder: String,
+) -> Result<Vec<rummage_proto::SearchFolderEntry>, ApiError> {
+    match core::request(&app, Request::ListSearchFolders { root_id, subfolder }).await? {
+        Reply::SearchFolders { folders } => Ok(folders),
+        other => Err(unexpected(&other)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

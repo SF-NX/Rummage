@@ -23,7 +23,7 @@ pub use setup::{
 };
 
 /// 首次发布前保持 1；发布后每次修改消息类型都要加 1。
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -101,6 +101,11 @@ pub enum Request {
     /// 让核心回复 `Done` 后正常退出（开发时重新构建前、界面发现核心版本不一致时）
     Shutdown,
     ListRoots,
+    /// 从索引中列出指定目录的直接子目录，不访问磁盘
+    ListSearchFolders {
+        root_id: i64,
+        subfolder: String,
+    },
     /// 添加被索引的文件夹，成功后立即在后台扫描它，回复 `Reply::Root`（新建的文件夹）。`excludes` 为它的用户排除规则
     /// （同 `SetRootExcludes`），有写法不正确的规则时不添加，回 `bad_request`
     AddRoot {
@@ -318,6 +323,7 @@ impl Request {
             Request::Ping
             | Request::GetParams
             | Request::ListRoots
+            | Request::ListSearchFolders { .. }
             | Request::IndexStatus
             | Request::FailedFiles { .. }
             | Request::Search { .. }
@@ -726,6 +732,9 @@ pub struct RebuildStatus {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all_fields = "camelCase")]
 pub enum Reply {
+    SearchFolders {
+        folders: Vec<SearchFolderEntry>,
+    },
     Pong,
     Params {
         values: BTreeMap<String, ParamValue>,
@@ -827,6 +836,14 @@ pub fn encode<T: Serialize>(msg: &T) -> String {
 
 pub fn decode<T: DeserializeOwned>(line: &str) -> Result<T, Error> {
     Ok(serde_json::from_str(line)?)
+}
+
+/// 搜索范围菜单中的直接子目录
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchFolderEntry {
+    pub name: String,
+    pub has_children: bool,
 }
 
 #[cfg(test)]

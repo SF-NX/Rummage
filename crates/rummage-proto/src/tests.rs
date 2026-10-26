@@ -54,6 +54,10 @@ fn request_round_trip() {
         Request::GetParams,
         Request::Shutdown,
         Request::ListRoots,
+        Request::ListSearchFolders {
+            root_id: 1,
+            subfolder: "照片\\".into(),
+        },
         Request::AddRoot {
             path: r"D:\资料".into(),
             excludes: vec!["*.tmp".into()],
@@ -219,6 +223,12 @@ fn request_round_trip() {
 fn response_and_event_round_trip() {
     for result in [
         Ok(Reply::Pong),
+        Ok(Reply::SearchFolders {
+            folders: vec![SearchFolderEntry {
+                name: "旅行".into(),
+                has_children: true,
+            }],
+        }),
         Ok(Reply::Done),
         Ok(Reply::DoneWithWarning {
             message: "设置已保存。".into(),

@@ -528,6 +528,33 @@ impl Db {
         sqlite(&self.dir, err)
     }
 
+    /// 从已收录文件的相对路径提取直接子目录，离线时仍可浏览；不读取文件内容
+    pub fn search_folders(
+        &self,
+        root_id: i64,
+        prefix: &str,
+    ) -> Result<Vec<(String, bool)>, DbError> {
+        self.conn
+            .prepare(
+                "WITH children AS (
+                SELECT substr(rel_path, length(?2) + 1) AS tail FROM files
+                WHERE root_id = ?1 AND substr(rel_path, 1, length(?2)) = ?2
+             )
+             SELECT substr(tail, 1, instr(tail, ?3) - 1) AS name,
+                    max(instr(substr(tail, instr(tail, ?3) + 1), ?3) > 0)
+             FROM children WHERE instr(tail, ?3) > 0
+             GROUP BY name ORDER BY name COLLATE NOCASE",
+            )
+            .and_then(|mut stmt| {
+                stmt.query_map(
+                    params![root_id, prefix, std::path::MAIN_SEPARATOR.to_string()],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?
+                .collect()
+            })
+            .map_err(|err| self.err(err))
+    }
+
     /// 全部参数；值不是合法 JSON 的行跳过并记录警告
     pub fn params(&self) -> Result<BTreeMap<String, serde_json::Value>, DbError> {
         let rows: Vec<(String, String)> = self

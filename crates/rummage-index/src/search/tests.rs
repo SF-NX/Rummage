@@ -646,3 +646,40 @@ fn long_image_slices_aggregate() {
     assert_eq!(file_names(&hits), ["照片.jpg", "长图.png"]);
     assert_eq!(hits[1].segments.len(), 1);
 }
+#[test]
+fn folder_menu_lists_direct_indexed_directories() {
+    let f = Fixture::new();
+    let root = f.root("D:\\资料");
+    let other = f.root("E:\\资料");
+    let sep = std::path::MAIN_SEPARATOR;
+    for rel in [
+        "根目录.txt".to_string(),
+        format!("照片_%{sep}a.jpg"),
+        format!("照片_%{sep}旅行{sep}b.jpg"),
+        format!("照片_%{sep}旅行{sep}c.jpg"),
+        format!("照片_%备份{sep}d.jpg"),
+    ] {
+        f.file(root, &rel, "image", 1);
+    }
+    f.file(other, &format!("别处{sep}a.jpg"), "image", 1);
+    let db = f.db.lock().unwrap();
+    assert_eq!(
+        db.search_folders(root, "").unwrap(),
+        [("照片_%".into(), true), ("照片_%备份".into(), false)]
+    );
+    assert_eq!(
+        db.search_folders(root, &format!("照片_%{sep}")).unwrap(),
+        [("旅行".into(), false)]
+    );
+    assert!(
+        db.search_folders(root, &format!("照片_%{sep}旅行{sep}"))
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        db.search_folders(root, &format!("不存在{sep}"))
+            .unwrap()
+            .is_empty()
+    );
+    assert!(db.search_folders(999, "").unwrap().is_empty());
+}
