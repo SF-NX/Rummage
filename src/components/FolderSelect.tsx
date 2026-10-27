@@ -5,7 +5,7 @@ import type { FolderFilter, RootInfo } from '../types'
 import { folderScope } from '../lib/filter'
 import { errorMessage } from '../lib/errors'
 import { useBackLayer } from '../hooks/useBackLayer'
-import { CheckIcon, ChevronDownIcon, ChevronRightIcon, FolderIcon } from './icons'
+import { CheckIcon, ChevronDownIcon, ChevronRightIcon } from './icons'
 import { SELECT_CLASS } from './Select'
 
 interface Props {
@@ -246,7 +246,6 @@ export default function FolderSelect({ roots, filters, onChange, disabled }: Pro
           >
             {selected ? <CheckIcon className="h-3 w-3" /> : partial ? <span className="h-px w-2 bg-current" /> : null}
           </span>
-          <FolderIcon className={`h-3.5 w-3.5 shrink-0 ${expanded || selected ? '' : 'text-gray-400'}`} />
           <span className="truncate">{folder.name}</span>
         </button>
         {folder.hasChildren && (
