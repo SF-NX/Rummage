@@ -55,6 +55,9 @@ export default function FolderSelect({ roots, filters, onChange, disabled }: Pro
   const [open, setOpen] = useState(false)
   const [position, setPosition] = useState({ left: 0, top: 0 })
   const [branches, setBranches] = useState<Branch[]>([])
+  const [childrenByFolder, setChildrenByFolder] = useState<Record<string, Folder[]>>({})
+  const pending = useRef(new Map<string, Promise<Folder[]>>())
+  const generation = useRef(0)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const sequence = useRef(0)
@@ -75,8 +78,64 @@ export default function FolderSelect({ roots, filters, onChange, disabled }: Pro
   useBackLayer(close, open)
 
   useEffect(() => {
+    generation.current++
+    pending.current.clear()
+    setChildrenByFolder({})
     close()
   }, [roots])
+
+  const loadChildren = (folder: Folder): Promise<Folder[]> => {
+    const key = keyOf(folder)
+    if (childrenByFolder[key]) return Promise.resolve(childrenByFolder[key])
+    const existing = pending.current.get(key)
+    if (existing) return existing
+    const version = generation.current
+    const request = invoke<{ name: string; hasChildren: boolean }[]>('list_search_folders', { rootId: folder.rootId, subfolder: folder.subfolder })
+      .then((entries) => {
+        const sep = folder.path.includes('\\') ? '\\' : '/'
+        const children = entries.map((entry) => ({
+          rootId: folder.rootId,
+          path: `${folder.path.replace(/[\\/]+$/, '')}${sep}${entry.name}`,
+          subfolder: `${folder.subfolder}${entry.name}${sep}`,
+          ...entry,
+        }))
+        if (version === generation.current) setChildrenByFolder((old) => ({ ...old, [key]: children }))
+        return children
+      })
+      .finally(() => {
+        if (pending.current.get(key) === request) pending.current.delete(key)
+      })
+    pending.current.set(key, request)
+    return request
+  }
+
+  // 只读取已选路径的祖先目录，菜单重新打开时也能恢复父项的全选状态
+  const scopeKey = JSON.stringify(scopes)
+  useEffect(() => {
+    if (!open || !filters.custom) return
+    for (const scope of scopes) {
+      const root = roots.find((r) => r.id === scope.rootId)
+      if (!root || !scope.rel) continue
+      const sep = root.path.includes('\\') ? '\\' : '/'
+      const parts = scope.rel.split(/[\\/]/)
+      for (let depth = 0; depth < parts.length; depth++) {
+        const subfolder = depth ? parts.slice(0, depth).join(sep) + sep : ''
+        void loadChildren({ rootId: root.id, path: `${root.path.replace(/[\\/]+$/, '')}${sep}${subfolder}`, subfolder, name: '', hasChildren: true }).catch((err) =>
+          console.warn('无法读取目录勾选状态：', err),
+        )
+      }
+    }
+  }, [open, filters.custom, scopeKey, roots])
+
+  const checked = (folder: Folder): boolean | 'mixed' => {
+    if (!filters.custom) return false
+    const rel = folder.subfolder.replace(/[\\/]+$/, '')
+    const sep = folder.path.includes('\\') ? '\\' : '/'
+    if (scopes.some((scope) => scope.rootId === folder.rootId && scope.rel === rel)) return true
+    if (!scopes.some((scope) => scope.rootId === folder.rootId && (!rel || scope.rel.startsWith(rel + sep)))) return false
+    const children = childrenByFolder[keyOf(folder)]
+    return children?.length && children.every((child) => checked(child) === true) ? true : 'mixed'
+  }
 
   useEffect(() => {
     if (!open) return
@@ -124,11 +183,11 @@ export default function FolderSelect({ roots, filters, onChange, disabled }: Pro
     const rel = folder.subfolder.replace(/[\\/]+$/, '')
     const sep = folder.path.includes('\\') ? '\\' : '/'
     const current = filters.custom ? scopes : []
-    const selected = current.some((scope) => scope.rootId === folder.rootId && scope.rel === rel)
+    const selected = checked(folder) === true
     // 父子范围相互包含时只保留本次选择的范围，其他分支继续参与搜索
     const next = current.filter((scope) => {
       if (scope.rootId !== folder.rootId) return true
-      if (selected) return scope.rel !== rel
+      if (selected) return scope.rel !== rel && rel !== '' && !scope.rel.startsWith(rel + sep)
       return scope.rel !== '' && rel !== '' && !rel.startsWith(scope.rel + sep) && !scope.rel.startsWith(rel + sep)
     })
     if (!selected) next.push({ rootId: folder.rootId, rel })
@@ -157,14 +216,7 @@ export default function FolderSelect({ roots, filters, onChange, disabled }: Pro
     const pos = folderMenuPosition(rect, Math.min(84, maxHeight), window.innerWidth, window.innerHeight)
     setBranches((old) => [...old.slice(0, depth), { folder, anchor: rect, children: null, error: '', ...pos, request }])
     try {
-      const entries = await invoke<{ name: string; hasChildren: boolean }[]>('list_search_folders', { rootId: folder.rootId, subfolder: folder.subfolder })
-      const sep = folder.path.includes('\\') ? '\\' : '/'
-      const children = entries.map((entry) => ({
-        rootId: folder.rootId,
-        path: `${folder.path.replace(/[\\/]+$/, '')}${sep}${entry.name}`,
-        subfolder: `${folder.subfolder}${entry.name}${sep}`,
-        ...entry,
-      }))
+      const children = await loadChildren(folder)
       const placed = folderMenuPosition(rect, Math.min(maxHeight, (Math.max(1, children.length) + 1) * 36 + 12), window.innerWidth, window.innerHeight)
       setBranches((old) => (old[depth]?.request === request ? [...old.slice(0, depth), { ...old[depth], children, ...placed }] : old))
     } catch (err) {
@@ -210,10 +262,9 @@ export default function FolderSelect({ roots, filters, onChange, disabled }: Pro
   }
 
   const row = (folder: Folder, level: number) => {
-    const rel = folder.subfolder.replace(/[\\/]+$/, '')
-    const sep = folder.path.includes('\\') ? '\\' : '/'
-    const selected = filters.custom && scopes.some((scope) => scope.rootId === folder.rootId && scope.rel === rel)
-    const partial = filters.custom && !selected && scopes.some((scope) => scope.rootId === folder.rootId && (!rel || scope.rel.startsWith(rel + sep)))
+    const state = checked(folder)
+    const selected = state === true
+    const partial = state === 'mixed'
     const expanded = branches[level] && keyOf(branches[level].folder) === keyOf(folder)
     return (
       <div
@@ -354,7 +405,7 @@ export default function FolderSelect({ roots, filters, onChange, disabled }: Pro
                   type="button"
                   data-row
                   role="menuitemcheckbox"
-                  aria-checked={filters.custom && scopes.some((scope) => scope.rootId === branch.folder.rootId && scope.rel === branch.folder.subfolder.replace(/[\\/]+$/, ''))}
+                  aria-checked={checked(branch.folder)}
                   className={`${ROW_CLASS} border-b border-gray-100 font-medium text-blue-600 dark:border-white/10 dark:text-blue-400`}
                   onMouseEnter={() => setBranches((old) => old.slice(0, depth + 1))}
                   onClick={() => select(branch.folder)}

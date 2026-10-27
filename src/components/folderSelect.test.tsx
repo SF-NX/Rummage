@@ -176,11 +176,13 @@ describe('FolderSelect', () => {
       { rootId: 1, rel: '旅行' },
       { rootId: 1, rel: '家庭' },
     ])
-    expect(item('照片').getAttribute('aria-checked')).toBe('mixed')
+    expect(item('照片').getAttribute('aria-checked')).toBe('true')
     expect(item('家庭').getAttribute('aria-checked')).toBe('true')
+    await click(item('家庭'))
+    expect(item('照片').getAttribute('aria-checked')).toBe('mixed')
     await hover('资料')
     await click(item('合同'))
-    expect(folderScope(change.mock.lastCall![0].entries)).toHaveLength(3)
+    expect(folderScope(change.mock.lastCall![0].entries)).toHaveLength(2)
     await click(item('照片'))
     expect(folderScope(change.mock.lastCall![0].entries)).toEqual([
       { rootId: 1, rel: '' },
@@ -219,10 +221,92 @@ describe('FolderSelect', () => {
       { rootId: 1, rel: '旅行\\海边' },
     ])
     await click(document.querySelector<HTMLButtonElement>('[data-level="2"] [data-row]')!)
-    expect(folderScope(change.mock.lastCall![0].entries)).toEqual([
-      { rootId: 1, rel: '旅行' },
-      { rootId: 1, rel: '旅行备份' },
-    ])
+    expect(folderScope(change.mock.lastCall![0].entries)).toEqual([{ rootId: 1, rel: '旅行备份' }])
+  })
+
+  it('子目录全部勾选后父项显示全选，取消一项变成半选，重新打开仍正确', async () => {
+    mockCore({
+      list_search_folders: () => [
+        { name: '旅行', hasChildren: false },
+        { name: '家庭', hasChildren: false },
+      ],
+    })
+    const change = vi.fn()
+    render(<Harness onChange={change} />)
+    await click(button('文件夹'))
+    await hover('照片')
+    await click(item('旅行'))
+    expect(item('照片').getAttribute('aria-checked')).toBe('mixed')
+    await click(item('家庭'))
+    expect(item('照片').getAttribute('aria-checked')).toBe('true')
+    await click(button('完成'))
+    await click(button('文件夹'))
+    expect(item('照片').getAttribute('aria-checked')).toBe('true')
+    await hover('照片')
+    await click(item('家庭'))
+    expect(item('照片').getAttribute('aria-checked')).toBe('mixed')
+  })
+
+  it('保存的孙目录全选可以逐层汇总，切换分支后状态不丢失，取消全选父项移除其下所有范围', async () => {
+    const list = [...roots, { ...roots[0], id: 2, path: 'E:\\文档' }]
+    mockCore({
+      list_search_folders: ({ subfolder }) =>
+        subfolder === ''
+          ? [{ name: '旅行', hasChildren: true }]
+          : [
+              { name: '海边', hasChildren: false },
+              { name: '山间', hasChildren: false },
+            ],
+    })
+    const change = vi.fn()
+    render(
+      <Harness
+        list={list}
+        initial={{
+          custom: true,
+          entries: [
+            { rootId: 1, rel: '', checked: true },
+            { rootId: 1, rel: '旅行\\海边', checked: true },
+            { rootId: 1, rel: '旅行\\山间', checked: true },
+            { rootId: 2, rel: '', checked: true },
+          ],
+        }}
+        onChange={change}
+      />,
+    )
+    await click(button('文件夹'))
+    expect(item('照片').getAttribute('aria-checked')).toBe('true')
+    await hover('照片')
+    expect(item('旅行').getAttribute('aria-checked')).toBe('true')
+    await hover('文档')
+    expect(item('照片').getAttribute('aria-checked')).toBe('true')
+    await click(item('照片'))
+    expect(folderScope(change.mock.lastCall![0].entries)).toEqual([{ rootId: 2, rel: '' }])
+    expect(item('照片').getAttribute('aria-checked')).toBe('false')
+  })
+
+  it('未知或读取失败的子目录不误报全选', async () => {
+    mockCore({
+      list_search_folders: () => {
+        throw { message: '读取失败' }
+      },
+    })
+    render(
+      <Harness
+        initial={{
+          custom: true,
+          entries: [
+            { rootId: 1, rel: '', checked: true },
+            { rootId: 1, rel: '旅行', checked: true },
+          ],
+        }}
+        onChange={vi.fn()}
+      />,
+    )
+    await click(button('文件夹'))
+    expect(item('照片').getAttribute('aria-checked')).toBe('mixed')
+    await hover('照片')
+    expect(item('照片').getAttribute('aria-checked')).toBe('mixed')
   })
 
   it('靠近右边缘向左展开，靠近底部上移，始终保留窗口边距', () => {
